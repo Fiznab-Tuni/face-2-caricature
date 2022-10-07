@@ -36,7 +36,7 @@ def add_sunglasses(img, p1, p2):
                        [p1[0]-delta, p1[1]+delta]]).astype(np.float32)
     warp_mat = cv.getAffineTransform(srcTri, dstTri)
     overlay = cv.warpAffine(overlay, warp_mat, (w1, h1))
-    cv.imshow('Overlay translated', overlay)
+    cv.imshow('Overlay transformed', overlay)
 
     alpha_channel = overlay[:, :, 3] / 255
     overlay_colors = overlay[:, :, :3]
@@ -50,6 +50,95 @@ def add_sunglasses(img, p1, p2):
     background[0:h, 0:w] = composite
 
     return background
+
+
+def update_map(ind, map_x, map_y):
+    hx, wx = map_x.shape[:2]
+    hy, wy = map_y.shape[:2]
+    print("Remapping pixels..")
+    print("Height: {}, Width: {}".format(hx, wx))
+    ind = 4
+    if ind == 0:
+        for i in range(hx):
+            for j in range(wx):
+                if wx * 0.25 < j < wx * 0.75 and hx * 0.25 < i < hx * 0.75:
+                    map_x[i,j] = 2 * (j - wx * 0.25) + 0.5
+                    map_y[i,j] = 2 * (i - hy * 0.25) + 0.5
+                else:
+                    map_x[i,j] = 0
+                    map_y[i,j] = 0
+    elif ind == 1:
+        for i in range(hx):
+            map_x[i,:] = [x for x in range(wx)]
+        for j in range(wy):
+            map_y[:,j] = [hy-y for y in range(hy)]
+    elif ind == 2:
+        for i in range(hx):
+            map_x[i,:] = [wx-x for x in range(wx)]
+        for j in range(wy):
+            map_y[:,j] = [y for y in range(hy)]
+    elif ind == 3:
+        for i in range(hx):
+            map_x[i,:] = [wx-x for x in range(wx)]
+        for j in range(wy):
+            map_y[:,j] = [hy-y for y in range(hy)]
+    elif ind == 4:
+        simple_mode = True
+        print("Using Pinch effect")
+        print("In simple mode: {}".format(simple_mode))
+
+        if simple_mode:
+            center = (wx // 2, hx // 2)
+            amount = 1
+            angle = math.pi
+        else:
+            center1 = (wx // 2, hx // 3)
+            center2 = (wx // 2, int(hx // 1.4))
+            amount1 = 2
+            amount2 = -0.7
+            angle = 0*math.pi
+
+        if hx < wx:
+            if simple_mode:
+                radius = hx * 0.5
+            else:
+                radius = hx * 0.2
+        else:
+            if simple_mode:
+                radius = wx * 0.5
+            else:
+                radius = wx * 0.2
+
+        for i in range(hx):
+            for j in range(wx):
+                if simple_mode:
+                    dist = math.dist(center, (j, i))
+                else:
+                    dist1 = math.dist(center1, (j, i))
+                    dist2 = math.dist(center2, (j, i))
+                    if dist1 < dist2:
+                        center = center1
+                        dist = dist1
+                        amount = amount1
+                    else:
+                        center = center2
+                        dist = dist2
+                        amount = amount2
+
+                if dist > radius or dist < 0.01:
+                    map_x[i,j] = j
+                    map_y[i,j] = i
+                else:
+                    d = dist/radius
+                    trans = math.sin(math.pi*0.5*d) ** amount
+                    dx = (j - center[0]) * trans
+                    dy = (i - center[1]) * trans
+                    e = (1 - d) ** 2
+                    a = angle * e
+                    c = math.cos(a)
+                    s = math.sin(a)
+                    map_x[i,j] = center[0] + c*dx - s*dy
+                    map_y[i,j] = center[1] + s*dx + c*dy
 
 
 def detectAndDisplay(frame):
@@ -176,6 +265,7 @@ def detectAndDisplay(frame):
 
     print()
     cv.imshow('Capture - Face detection', frame)
+    #cv.imwrite('../examples/' + jpeg, frame)
 
 
 parser = argparse.ArgumentParser(description='Code for Cascade Classifier tutorial.')
@@ -290,12 +380,25 @@ while True:
 
 for jpeg in files:
     frame = cv.imread(imagepath + jpeg)
+    print()
     print("Loading image:", jpeg)
     if frame is None:
         print('--(!) No captured frame -- Break!')
         break
 
-    detectAndDisplay(frame)
+    map_x = np.zeros((frame.shape[0], frame.shape[1]), dtype=np.float32)
+    map_y = np.zeros((frame.shape[0], frame.shape[1]), dtype=np.float32)
+
+    ind = 0
+    update_map(ind, map_x, map_y)
+
+    dst = cv.remap(frame, map_x, map_y, cv.INTER_LINEAR)
+
+    cv.imshow("Remapping Pixels", dst)
+    #cv.imwrite('../examples/' + jpeg, dst)
+
+    #detectAndDisplay(frame)
+    #detectAndDisplay(dst)
 
     # Limit FPS
     #if cv.waitKey(get_delay(start, fps=30)) & 0xFF == ord('q'):
