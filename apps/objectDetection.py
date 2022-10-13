@@ -1,4 +1,7 @@
 from __future__ import print_function
+
+import copy
+
 import cv2 as cv
 import numpy as np
 import scipy.io as sio
@@ -57,6 +60,7 @@ def update_map(ind, map_x, map_y):
     hy, wy = map_y.shape[:2]
     print("Remapping pixels..")
     print("Height: {}, Width: {}".format(hx, wx))
+
     ind = 4
     if ind == 0:
         for i in range(hx):
@@ -67,30 +71,43 @@ def update_map(ind, map_x, map_y):
                 else:
                     map_x[i,j] = 0
                     map_y[i,j] = 0
+
     elif ind == 1:
         for i in range(hx):
             map_x[i,:] = [x for x in range(wx)]
         for j in range(wy):
             map_y[:,j] = [hy-y for y in range(hy)]
+
     elif ind == 2:
         for i in range(hx):
             map_x[i,:] = [wx-x for x in range(wx)]
         for j in range(wy):
             map_y[:,j] = [y for y in range(hy)]
+
     elif ind == 3:
         for i in range(hx):
             map_x[i,:] = [wx-x for x in range(wx)]
         for j in range(wy):
             map_y[:,j] = [hy-y for y in range(hy)]
+
     elif ind == 4:
         simple_mode = True
         print("Using Pinch effect")
         print("In simple mode: {}".format(simple_mode))
 
         if simple_mode:
-            center = (wx // 2, hx // 2)
-            amount = 1
-            angle = math.pi
+            if detected_nose:
+                print("Using nose")
+                center = (wx // 2, hx // 2)
+                #center = detected_nose
+                amount = -0.4
+                angle = 1 * math.pi
+            else:
+                print("Using center")
+                center = (wx // 2, hx // 2)
+                amount = 0.7
+                angle = 0 * math.pi
+
         else:
             center1 = (wx // 2, hx // 3)
             center2 = (wx // 2, int(hx // 1.4))
@@ -141,140 +158,249 @@ def update_map(ind, map_x, map_y):
                     map_y[i,j] = center[1] + s*dx + c*dy
 
 
+def detect_smile(face, use_cutoff=True):
+    h, w = face.shape[:2]
+
+    if use_cutoff:
+        print("Using cutoff for smiles")
+        cutoff = int(0.7 * h)
+        smileROI = face[cutoff:h, :]
+        smiles = smile_cascade.detectMultiScale(smileROI)
+    else:
+        smiles = smile_cascade.detectMultiScale(face)
+
+    #print("smiles:", len(smiles))
+    if len(smiles) == 0:
+        print("Using default value for smile")
+        p1 = (int(0.3 * w), int(0.7 * h))
+        p2 = (int(0.7 * w), int(0.9 * h))
+
+    elif len(smiles) > 1:
+        print("Non Maximum Suppression for smiles")
+        scores = 0.9 * (np.ones(len(smiles)))
+        score_threshold = 0.8
+        nms_threshold = 0.05
+        kept_indices = cv.dnn.NMSBoxes(smiles, scores, score_threshold, nms_threshold)
+        # print(kept_indices)
+        for i in kept_indices:
+            (x2, y2, w2, h2) = smiles[i]
+            if use_cutoff:
+                p1 = (x2, y2 + cutoff)
+                p2 = (x2 + w2, y2 + h2 + cutoff)
+            else:
+                p1 = (x2, y2)
+                p2 = (x2 + w2, y2 + h2)
+
+    else:
+        for (x2, y2, w2, h2) in smiles:
+            print("Detected smile with general detector")
+            if use_cutoff:
+                p1 = (x2, y2 + cutoff)
+                p2 = (x2 + w2, y2 + h2 + cutoff)
+            else:
+                p1 = (x2, y2)
+                p2 = (x2 + w2, y2 + h2)
+
+    return p1, p2
+
+
+def detect_nose(face, use_cutoff=True):
+    h, w = face.shape[:2]
+
+    if use_cutoff:
+        print("Using cutoff for noses")
+        cutoff = int(0.2 * h)
+        noseROI = face[cutoff:h-cutoff, :]
+        noses = nose_cascade.detectMultiScale(noseROI)
+    else:
+        noses = nose_cascade.detectMultiScale(face)
+
+    #print("noses:", len(noses))
+    if len(noses) == 0:
+        print("Using default value for nose")
+        p1 = (int(0.4 * w), int(0.4 * h))
+        p2 = (int(0.6 * w), int(0.6 * h))
+
+    elif len(noses) > 1:
+        print("Non Maximum Suppression for noses")
+        scores = 0.9 * (np.ones(len(noses)))
+        score_threshold = 0.8
+        nms_threshold = 0.05
+        kept_indices = cv.dnn.NMSBoxes(noses, scores, score_threshold, nms_threshold)
+        # print(kept_indices)
+        for i in kept_indices:
+            (x2, y2, w2, h2) = noses[i]
+            if use_cutoff:
+                p1 = (x2, y2 + cutoff)
+                p2 = (x2 + w2, y2 + h2 + cutoff)
+            else:
+                p1 = (x2, y2)
+                p2 = (x2 + w2, y2 + h2)
+
+    else:
+        for (x2, y2, w2, h2) in noses:
+            print("Detected nose with general detector")
+            if use_cutoff:
+                p1 = (x2, y2 + cutoff)
+                p2 = (x2 + w2, y2 + h2 + cutoff)
+            else:
+                p1 = (x2, y2)
+                p2 = (x2 + w2, y2 + h2)
+
+    return p1, p2
+
+
+def detect_eyes(face, use_cutoff=True):
+    h, w = face.shape[:2]
+    no_detection = True
+    radius = int(round(0.2 * w))
+    points = []
+
+    if use_cutoff:
+        print("Using cutoff for eyes")
+        cutoff = int(0.5 * h)
+        eyeROI = face[:cutoff, :]
+        eyes = eyes_cascade.detectMultiScale(eyeROI)
+    else:
+        eyeROI = face
+        eyes = eyes_cascade.detectMultiScale(eyeROI)
+
+    if len(eyes) == 2:
+        print("Detected eyes with general detector")
+        no_detection = False
+        for (x2,y2,w2,h2) in eyes:
+            eye_center = (x2 + w2//2, y2 + h2//2)
+            points.append(eye_center)
+
+    else:
+        right_eyes = right_eye_cascade.detectMultiScale(eyeROI)
+        if len(right_eyes) == 2:
+            print("Detected eyes with right eye detector")
+            no_detection = False
+            for (x2, y2, w2, h2) in right_eyes:
+                eye_center = (x2 + w2//2, y2 + h2//2)
+                points.append(eye_center)
+
+        else:
+            left_eyes = left_eye_cascade.detectMultiScale(eyeROI)
+            if len(left_eyes) == 2:
+                print("Detected eyes with left eye detector")
+                no_detection = False
+                for (x2, y2, w2, h2) in left_eyes:
+                    eye_center = (x2 + w2//2, y2 + h2//2)
+                    points.append(eye_center)
+
+    if no_detection:
+        print("Using default values for eyes")
+        left_eye = (int(0.3 * w), int(0.4 * h))
+        points.append(left_eye)
+        right_eye = (int(0.7 * w), int(0.4 * h))
+        points.append(right_eye)
+
+    return points, radius
+
+
+detected_nose = None
 def detectAndDisplay(frame):
+    global detected_nose
     frame_gray = cv.cvtColor(frame, cv.COLOR_BGR2GRAY)
     frame_gray = cv.equalizeHist(frame_gray)
 
     #-- Detect faces
     faces = face_cascade.detectMultiScale(frame_gray)
-    thickness = 2
     use_cutoff = True
+    thickness = 2
     points = []
-    for (x,y,w,h) in faces:
-        no_detection = True
-        points = []
+    ind = 0
 
-        center = (x + w//2, y + h//2)
-        frame = cv.ellipse(frame, center, (w//2, h//2), 0, 0, 360, (255, 0, 255), thickness)
-        p1 = (x, y)
-        p2 = (x + w, y + h)
-        frame = cv.rectangle(frame, p1, p2, (0, 0, 255), thickness)
+    for (x,y,w,h) in faces:
+        detected_nose = None
 
         # -- In each face, detect objects
         faceROI = frame_gray[y:y+h,x:x+w]
-        if use_cutoff:
-            print("Using cutoff for smiles")
-            cutoff = int(0.7*h)
-            smileROI = frame_gray[y+cutoff:y+h,x:x+w]
-            smiles = smile_cascade.detectMultiScale(smileROI)
-        else:
-            smiles = smile_cascade.detectMultiScale(faceROI)
 
-        print("smiles:", len(smiles))
-        if len(smiles) == 0:
-            print("Using default value for smile")
-            p1 = (x + int(0.3 * w), y + int(0.7 * h))
-            p2 = (x + int(0.7 * w), y + int(0.9 * h))
+        # -- Detect smile
+        p1, p2 = detect_smile(faceROI, use_cutoff)
 
-            frame = cv.rectangle(frame, p1, p2, (0, 0, 255), thickness)
+        p1 = np.add(p1, ((x - w//3), (y - h//3)))
+        p2 = np.add(p2, ((x + w//3), (y + h//3)))
+        smileROI = frame[p1[1]:p2[1], p1[0]:p2[0]]
 
-        elif len(smiles) > 1:
-            print("Non Maximum Suppression for smiles")
-            scores = 0.9*(np.ones(len(smiles)))
-            score_threshold = 0.8
-            nms_threshold = 0.05
-            kept_indices = cv.dnn.NMSBoxes(smiles, scores, score_threshold, nms_threshold)
-            #print(kept_indices)
-            for i in kept_indices:
-                (x2, y2, w2, h2) = smiles[i]
-                if use_cutoff:
-                    p1 = (x + x2, y + y2 + cutoff)
-                    p2 = (x + x2 + w2, y + y2 + h2 + cutoff)
-                else:
-                    p1 = (x + x2, y + y2)
-                    p2 = (x + x2 + w2, y + y2 + h2)
+        map_x = np.zeros((smileROI.shape[0], smileROI.shape[1]), dtype=np.float32)
+        map_y = np.zeros((smileROI.shape[0], smileROI.shape[1]), dtype=np.float32)
 
-                #print(p1, p2)
-                frame = cv.rectangle(frame, p1, p2, (0, 0, 255), thickness)
+        update_map(ind, map_x, map_y)
 
-        else:
-            for (x2, y2, w2, h2) in smiles:
-                print("Detected smile with general detector")
-                # eye_center = (x + x2 + w2 // 2, y + y2 + h2 // 2)
-                if use_cutoff:
-                    p1 = (x + x2, y + y2 + cutoff)
-                    p2 = (x + x2 + w2, y + y2 + h2 + cutoff)
-                else:
-                    p1 = (x + x2, y + y2)
-                    p2 = (x + x2 + w2, y + y2 + h2)
+        newROI = cv.remap(smileROI, map_x, map_y, cv.INTER_LINEAR)
+        frame[p1[1]:p2[1], p1[0]:p2[0]] = newROI
 
-                #print(p1,p2)
-                # radius = int(round((w2 + h2) * 0.15))
-                # frame = cv.circle(frame, eye_center, radius, (0, 0, 255), 4)
-                frame = cv.rectangle(frame, p1, p2, (0, 0, 255), thickness)
+        # -- Detect nose
+        p1, p2 = detect_nose(faceROI, use_cutoff)
 
-        cutoff = int(0.5 * h)
-        eyeROI = frame_gray[y:y + cutoff, x:x + w]
-        #eyes = eyes_cascade.detectMultiScale(faceROI)
-        eyes = eyes_cascade.detectMultiScale(eyeROI)
-        if len(eyes) == 2:
-            for (x2,y2,w2,h2) in eyes:
-                print("Detected eye with general detector")
-                no_detection = False
-                eye_center = (x + x2 + w2//2, y + y2 + h2//2)
-                points.append(eye_center)
-                radius = int(round((w2 + h2)*0.25))
-                frame = cv.circle(frame, eye_center, radius, (255, 0, 0 ), thickness)
+        width = p2[0] - p1[0]
+        height = p2[1] - p1[1]
+        detected_nose = (p1[0] + width//2, p1[1] + height//2)
 
-        else:
-            #right_eyes = right_eye_cascade.detectMultiScale(faceROI)
-            right_eyes = right_eye_cascade.detectMultiScale(eyeROI)
-            if len(right_eyes) == 2:
-                for (x2, y2, w2, h2) in right_eyes:
-                    print("Detected eye with right eye detector")
-                    no_detection = False
-                    eye_center = (x + x2 + w2 // 2, y + y2 + h2 // 2)
-                    points.append(eye_center)
-                    radius = int(round((w2 + h2) * 0.15))
-                    frame = cv.circle(frame, eye_center, radius, (0, 255, 255), thickness)
+        p1 = np.add(p1, ((x - w//4), (y - h//4)))
+        p2 = np.add(p2, ((x + w//4), (y + h//4)))
+        noseROI = frame[p1[1]:p2[1], p1[0]:p2[0]]
 
-            else:
-                #left_eyes = left_eye_cascade.detectMultiScale(faceROI)
-                left_eyes = left_eye_cascade.detectMultiScale(eyeROI)
-                for (x2, y2, w2, h2) in left_eyes:
-                    print("Detected eye with left eye detector")
-                    no_detection = False
-                    eye_center = (x + x2 + w2 // 2, y + y2 + h2 // 2)
-                    points.append(eye_center)
-                    radius = int(round((w2 + h2) * 0.20))
-                    frame = cv.circle(frame, eye_center, radius, (255, 255, 0), thickness)
+        map_x = np.zeros((noseROI.shape[0], noseROI.shape[1]), dtype=np.float32)
+        map_y = np.zeros((noseROI.shape[0], noseROI.shape[1]), dtype=np.float32)
 
-        if no_detection:
-            print("Using default values for eyes")
-            radius = int(round(0.2 * w))
-            left_eye = (x + int(0.3 * w), y + int(0.4 * h))
-            points.append(left_eye)
-            frame = cv.circle(frame, left_eye, radius, (255, 255, 255), thickness)
-            right_eye = (x + int(0.7 * w), y + int(0.4 * h))
-            points.append(right_eye)
-            frame = cv.circle(frame, right_eye, radius, (255, 255, 255), thickness)
+        update_map(ind, map_x, map_y)
 
+        newROI = cv.remap(noseROI, map_x, map_y, cv.INTER_LINEAR)
+        frame[p1[1]:p2[1], p1[0]:p2[0]] = newROI
+
+        detected_nose = None
+
+        # -- Detect eyes
+        points, radius = detect_eyes(faceROI, use_cutoff)
+
+        p1 = np.add(points[0], ((x - w//3), (y - h//3)))
+        p2 = np.add(points[0], ((x + w//3), (y + h//3)))
+        eyeROI = frame[p1[1]:p2[1], p1[0]:p2[0]]
+
+        map_x = np.zeros((eyeROI.shape[0], eyeROI.shape[1]), dtype=np.float32)
+        map_y = np.zeros((eyeROI.shape[0], eyeROI.shape[1]), dtype=np.float32)
+
+        update_map(ind, map_x, map_y)
+
+        newROI = cv.remap(eyeROI, map_x, map_y, cv.INTER_LINEAR)
+        frame[p1[1]:p2[1], p1[0]:p2[0]] = newROI
+
+        p1 = np.add(points[1], ((x - w//3), (y - h//3)))
+        p2 = np.add(points[1], ((x + w//3), (y + h//3)))
+        eyeROI = frame[p1[1]:p2[1], p1[0]:p2[0]]
+
+        map_x = np.zeros((eyeROI.shape[0], eyeROI.shape[1]), dtype=np.float32)
+        map_y = np.zeros((eyeROI.shape[0], eyeROI.shape[1]), dtype=np.float32)
+
+        update_map(ind, map_x, map_y)
+
+        newROI = cv.remap(eyeROI, map_x, map_y, cv.INTER_LINEAR)
+        frame[p1[1]:p2[1], p1[0]:p2[0]] = newROI
+
+    '''
     print("detector points", points)
     if len(points) == 2:
-        frame = add_sunglasses(frame, points[0], points[1])
+        #frame = add_sunglasses(frame, points[0], points[1])
+        frame = add_sunglasses(frame, np.add(points[0], (x, y)), np.add(points[1], (x, y)))
+    '''
 
-    print()
     cv.imshow('Capture - Face detection', frame)
-    #cv.imwrite('../examples/' + jpeg, frame)
+    cv.imwrite('../examples/' + jpeg, frame)
 
 
 parser = argparse.ArgumentParser(description='Code for Cascade Classifier tutorial.')
 parser.add_argument('--face_cascade', help='Path to face cascade.', default='../data/haarcascades/haarcascade_frontalface_alt.xml')
 #parser.add_argument('--eyes_cascade', help='Path to eyes cascade.', default='../data/haarcascades/haarcascade_eye_tree_eyeglasses.xml')
 parser.add_argument('--eyes_cascade', help='Path to eyes cascade.', default='../data/haarcascades/haarcascade_eye.xml')
-parser.add_argument('--left_eye_cascade', help='Path to eyes cascade.', default='../data/haarcascades/haarcascade_lefteye_2splits.xml')
-parser.add_argument('--right_eye_cascade', help='Path to eyes cascade.', default='../data/haarcascades/haarcascade_righteye_2splits.xml')
-parser.add_argument('--smile_cascade', help='Path to eyes cascade.', default='../data/haarcascades/haarcascade_smile.xml')
+parser.add_argument('--left_eye_cascade', help='Path to left eye cascade.', default='../data/haarcascades/haarcascade_lefteye_2splits.xml')
+parser.add_argument('--right_eye_cascade', help='Path to right eye cascade.', default='../data/haarcascades/haarcascade_righteye_2splits.xml')
+parser.add_argument('--smile_cascade', help='Path to smile cascade.', default='../data/haarcascades/haarcascade_smile.xml')
+parser.add_argument('--nose_cascade', help='Path to nose cascade.', default='../data/haarcascades/haarcascade_mcs_nose.xml')
 #parser.add_argument('--camera', help='Camera divide number.', type=int, default=0)
 parser.add_argument('--image', help='Path to input image.', default='../data/images/face001.png')
 #parser.add_argument('--image', help='Path to input image.', default='../data/images/face004.jpg')
@@ -288,12 +414,14 @@ eyes_cascade_name = args.eyes_cascade
 left_eye_cascade_name = args.left_eye_cascade
 right_eye_cascade_name = args.right_eye_cascade
 smile_cascade_name = args.smile_cascade
+nose_cascade_name = args.nose_cascade
 
 face_cascade = cv.CascadeClassifier()
 eyes_cascade = cv.CascadeClassifier()
 left_eye_cascade = cv.CascadeClassifier()
 right_eye_cascade = cv.CascadeClassifier()
 smile_cascade = cv.CascadeClassifier()
+nose_cascade = cv.CascadeClassifier()
 
 #-- 1. Load the cascades
 if not face_cascade.load(cv.samples.findFile(face_cascade_name)):
@@ -306,10 +434,13 @@ if not left_eye_cascade.load(cv.samples.findFile(left_eye_cascade_name)):
     print('--(!)Error loading left eye cascade')
     exit(0)
 if not right_eye_cascade.load(cv.samples.findFile(right_eye_cascade_name)):
-    print('--(!)Error loading eyes cascade')
+    print('--(!)Error loading right eye cascade')
     exit(0)
 if not smile_cascade.load(cv.samples.findFile(smile_cascade_name)):
-    print('--(!)Error loading eyes cascade')
+    print('--(!)Error loading smile cascade')
+    exit(0)
+if not nose_cascade.load(cv.samples.findFile(nose_cascade_name)):
+    print('--(!)Error loading nose cascade')
     exit(0)
 
 #-- 2. Read one image
@@ -386,19 +517,7 @@ for jpeg in files:
         print('--(!) No captured frame -- Break!')
         break
 
-    map_x = np.zeros((frame.shape[0], frame.shape[1]), dtype=np.float32)
-    map_y = np.zeros((frame.shape[0], frame.shape[1]), dtype=np.float32)
-
-    ind = 0
-    update_map(ind, map_x, map_y)
-
-    dst = cv.remap(frame, map_x, map_y, cv.INTER_LINEAR)
-
-    cv.imshow("Remapping Pixels", dst)
-    #cv.imwrite('../examples/' + jpeg, dst)
-
-    #detectAndDisplay(frame)
-    #detectAndDisplay(dst)
+    detectAndDisplay(frame)
 
     # Limit FPS
     #if cv.waitKey(get_delay(start, fps=30)) & 0xFF == ord('q'):
